@@ -1,0 +1,116 @@
+Para criar uma biblioteca em C# que aplique mascaramento de dados sensíveis com base em uma anotação, você pode seguir a abordagem abaixo. Essa solução utiliza **Reflection** para inspecionar as propriedades de um objeto e aplicar a lógica de mascaramento sem a necessidade de sobrescrever métodos de processamento.
+
+---
+
+### 1. **Crie a Anotação**
+Defina um atributo personalizado para marcar os campos que devem ser mascarados.
+
+```csharp
+[AttributeUsage(AttributeTargets.Property, AllowMultiple = false)]
+public class MaskAttribute : Attribute
+{
+    public string MaskPattern { get; }
+
+    public MaskAttribute(string maskPattern = "****")
+    {
+        MaskPattern = maskPattern;
+    }
+}
+```
+
+---
+
+### 2. **Implemente a Biblioteca de Mascaramento**
+Crie um serviço genérico que percorra as propriedades do objeto e aplique o mascaramento nas propriedades anotadas.
+
+```csharp
+using System;
+using System.Reflection;
+
+public static class DataMaskingService
+{
+    public static T MaskSensitiveData<T>(T obj)
+    {
+        if (obj == null) return default;
+
+        var properties = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance);
+        foreach (var property in properties)
+        {
+            // Verifique se a propriedade possui o atributo MaskAttribute
+            var maskAttribute = property.GetCustomAttribute<MaskAttribute>();
+            if (maskAttribute != null)
+            {
+                // Verifique se a propriedade é uma string e é settable
+                if (property.PropertyType == typeof(string) && property.CanWrite)
+                {
+                    var value = (string)property.GetValue(obj);
+                    if (!string.IsNullOrEmpty(value))
+                    {
+                        // Aplique o padrão de máscara
+                        property.SetValue(obj, maskAttribute.MaskPattern);
+                    }
+                }
+            }
+        }
+
+        return obj;
+    }
+}
+```
+
+---
+
+### 3. **Utilização**
+Adicione a anotação às propriedades sensíveis no seu modelo.
+
+```csharp
+public class User
+{
+    public string Name { get; set; }
+
+    [Mask("XXXX-XXXX-XXXX")]
+    public string CreditCardNumber { get; set; }
+
+    [Mask]
+    public string SSN { get; set; } // O padrão será "****"
+}
+```
+
+No código, aplique o mascaramento ao objeto desejado.
+
+```csharp
+var user = new User
+{
+    Name = "John Doe",
+    CreditCardNumber = "1234-5678-9101-1121",
+    SSN = "987-65-4321"
+};
+
+var maskedUser = DataMaskingService.MaskSensitiveData(user);
+
+Console.WriteLine($"Name: {maskedUser.Name}");
+Console.WriteLine($"CreditCardNumber: {maskedUser.CreditCardNumber}");
+Console.WriteLine($"SSN: {maskedUser.SSN}");
+```
+
+---
+
+### 4. **Resultados**
+A saída será:
+
+```
+Name: John Doe
+CreditCardNumber: XXXX-XXXX-XXXX
+SSN: ****
+```
+
+---
+
+### Benefícios da Solução
+- **Reflexão Dinâmica:** Nenhum método específico precisa ser sobrescrito.
+- **Extensibilidade:** É fácil adicionar novos padrões de mascaramento ao `MaskAttribute`.
+- **Reutilizável:** Pode ser aplicado a qualquer classe com a anotação.
+
+### Pontos a Considerar
+- **Performance:** Reflection tem um pequeno impacto de desempenho; se você processar muitos objetos, pode considerar caching de metadados.
+- **Imutabilidade:** Essa solução funciona diretamente no objeto passado. Se preferir um objeto mascarado separado, crie uma cópia antes de aplicar o mascaramento.
