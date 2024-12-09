@@ -1,0 +1,120 @@
+Abaixo está um exemplo básico de como criar um **Source Generator** em C# usando `IIncrementalGenerator`. Este exemplo gera um arquivo com uma classe chamada `HelloWorld` que contém um método estático `SayHello()` que imprime "Hello, World!" no console.
+
+---
+
+### 1. Criar o Projeto do Source Generator
+
+Crie um projeto do tipo **Class Library**. No exemplo, o projeto será chamado `HelloWorldGenerator`.
+
+Atualize o arquivo `.csproj` com as seguintes configurações para indicar que o projeto é um gerador de código:
+
+```xml
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <IsRoslynComponent>true</IsRoslynComponent>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.0.1" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" Version="3.3.3" PrivateAssets="all" />
+  </ItemGroup>
+</Project>
+```
+
+---
+
+### 2. Criar o Source Generator
+
+Crie uma classe chamada `HelloWorldGenerator` e implemente a interface `IIncrementalGenerator`:
+
+```csharp
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Text;
+using System.Text;
+
+[Generator]
+public class HelloWorldGenerator : IIncrementalGenerator
+{
+    public void Initialize(IncrementalGeneratorInitializationContext context)
+    {
+        // Adiciona um gerador simples que cria um código estático.
+        context.RegisterSourceOutput(context.CompilationProvider, (ctx, compilation) =>
+        {
+            // Código gerado
+            var source = @"
+namespace Generated
+{
+    public static class HelloWorld
+    {
+        public static void SayHello()
+        {
+            System.Console.WriteLine(""Hello, World!"");
+        }
+    }
+}";
+            // Adiciona o código ao projeto
+            ctx.AddSource("HelloWorld.g.cs", SourceText.From(source, Encoding.UTF8));
+        });
+    }
+}
+```
+
+---
+
+### 3. Usar o Gerador no Projeto Consumidor
+
+Crie um novo projeto do tipo **Console Application**. No exemplo, o projeto será chamado `HelloWorldApp`.
+
+No arquivo `.csproj` deste projeto, adicione uma referência ao gerador criado anteriormente:
+
+```xml
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net6.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\HelloWorldGenerator\HelloWorldGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+</Project>
+```
+
+No arquivo `Program.cs`, você pode usar o código gerado:
+
+```csharp
+using Generated;
+
+class Program
+{
+    static void Main()
+    {
+        HelloWorld.SayHello();
+    }
+}
+```
+
+---
+
+### 4. Build e Execução
+
+1. Compile o gerador de código e o projeto consumidor.
+2. Execute o projeto consumidor.
+3. A saída do console será:
+
+```
+Hello, World!
+```
+
+---
+
+### Explicação
+
+- **`IIncrementalGenerator`**: A interface fornece um modelo incremental para gerar código, permitindo melhorar a performance de builds incrementais.
+- **`AddSource`**: Adiciona o código gerado ao pipeline de compilação.
+- **`context.CompilationProvider`**: Fornece acesso ao contexto de compilação, permitindo análises ou geração de código baseadas na compilação atual.
+
+Este é um exemplo básico para demonstrar a estrutura. Você pode estender esse gerador para analisar o código existente, gerar código com base em atributos ou outros critérios personalizados.
