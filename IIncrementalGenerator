@@ -1,0 +1,199 @@
+Usando o **IIncrementalGenerator**, você pode criar um **Source Generator** moderno e eficiente, aproveitando pipelines incrementais para gerar código em tempo de compilação. Vou descrever todo o processo passo a passo:
+
+---
+
+### **Passo 1: Criar o Projeto do Gerador**
+1. Crie um novo projeto para o gerador:
+   ```bash
+   dotnet new classlib -n MaskingGenerator
+   cd MaskingGenerator
+   ```
+
+2. Edite o arquivo `.csproj` para incluir o SDK Roslyn:
+   ```xml
+   <PropertyGroup>
+       <TargetFramework>netstandard2.0</TargetFramework>
+       <OutputItemType>Analyzer</OutputItemType>
+       <IncludeBuildOutput>true</IncludeBuildOutput>
+       <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+   </PropertyGroup>
+   ```
+
+3. Adicione as dependências necessárias:
+   ```bash
+   dotnet add package Microsoft.CodeAnalysis.CSharp
+   ```
+
+---
+
+### **Passo 2: Implementar o Gerador**
+
+Crie o arquivo `MaskingGenerator.cs` no projeto **MaskingGenerator**:
+
+```csharp
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Text;
+using System.Linq;
+using System.Text;
+
+[Generator]
+public class MaskingGenerator : IIncrementalGenerator
+{
+    public void Initialize(IncrementalGeneratorInitializationContext context)
+    {
+        // Pipeline incremental para encontrar classes com propriedades anotadas com [Mask]
+        var classesWithMaskAttributes = context.SyntaxProvider
+            .CreateSyntaxProvider(
+                predicate: static (node, _) => node is PropertyDeclarationSyntax prop && prop.AttributeLists.Count > 0,
+                transform: static (context, _) =>
+                {
+                    var property = (PropertyDeclarationSyntax)context.Node;
+                    var classDeclaration = property.Parent as ClassDeclarationSyntax;
+
+                    return (ClassDeclarationSyntax: classDeclaration, Property: property);
+                })
+            .Where(static x => x.ClassDeclarationSyntax is not null);
+
+        // Combine os resultados e gere o código
+        context.RegisterSourceOutput(classesWithMaskAttributes, GenerateMaskedClasses);
+    }
+
+    private void GenerateMaskedClasses(SourceProductionContext context, (ClassDeclarationSyntax ClassDeclarationSyntax, PropertyDeclarationSyntax Property) input)
+    {
+        var classDeclaration = input.ClassDeclarationSyntax;
+        var property = input.Property;
+
+        var className = classDeclaration.Identifier.Text;
+        var namespaceName = classDeclaration.Parent is NamespaceDeclarationSyntax namespaceDecl
+            ? namespaceDecl.Name.ToString()
+            : "GlobalNamespace";
+
+        var maskAttribute = property.AttributeLists
+            .SelectMany(a => a.Attributes)
+            .FirstOrDefault(attr => attr.Name.ToString() == "Mask");
+
+        if (maskAttribute == null)
+            return;
+
+        var maskValue = maskAttribute.ArgumentList?.Arguments.FirstOrDefault()?.ToString()?.Trim('"') ?? "***";
+        var propertyName = property.Identifier.Text;
+
+        var source = $@"
+namespace {namespaceName}
+{{
+    public partial class {className}
+    {{
+        public string {propertyName}_Masked => {propertyName} != null ? ""{maskValue}"" : null;
+    }}
+}}
+";
+
+        context.AddSource($"{className}_{propertyName}_Masked.g.cs", SourceText.From(source, Encoding.UTF8));
+    }
+}
+```
+
+---
+
+### **Passo 3: Criar o Projeto de Teste ou Consumo**
+
+1. Crie um projeto de teste ou consumo do gerador:
+   ```bash
+   cd ..
+   dotnet new console -n MaskingConsumer
+   cd MaskingConsumer
+   ```
+
+2. Adicione o projeto do gerador como referência:
+   ```bash
+   dotnet add reference ../MaskingGenerator/MaskingGenerator.csproj
+   ```
+
+3. Adicione o atributo `MaskAttribute` no projeto de consumo:
+
+Crie o arquivo `MaskAttribute.cs`:
+```csharp
+using System;
+
+[AttributeUsage(AttributeTargets.Property)]
+public class MaskAttribute : Attribute
+{
+    public string MaskPattern { get; }
+
+    public MaskAttribute(string maskPattern = "***")
+    {
+        MaskPattern = maskPattern;
+    }
+}
+```
+
+---
+
+### **Passo 4: Definir uma Classe com Propriedades Mascaradas**
+
+No projeto **MaskingConsumer**, crie o arquivo `User.cs`:
+
+```csharp
+public partial class User
+{
+    public string Name { get; set; }
+
+    [Mask("XXXX-XXXX-XXXX")]
+    public string CreditCardNumber { get; set; }
+
+    [Mask]
+    public string SSN { get; set; }
+}
+```
+
+---
+
+### **Passo 5: Consumir o Código Gerado**
+
+No programa principal, acesse as propriedades _Masked_:
+
+Crie o arquivo `Program.cs`:
+```csharp
+using System;
+
+var user = new User
+{
+    Name = "John Doe",
+    CreditCardNumber = "1234-5678-9101-1121",
+    SSN = "987-65-4321"
+};
+
+Console.WriteLine($"Name: {user.Name}");
+Console.WriteLine($"Credit Card: {user.CreditCardNumber_Masked}");
+Console.WriteLine($"SSN: {user.SSN_Masked}");
+```
+
+---
+
+### **Passo 6: Testar o Projeto**
+
+1. Compile e execute o projeto de consumo:
+   ```bash
+   dotnet run --project MaskingConsumer
+   ```
+
+2. Saída esperada:
+   ```
+   Name: John Doe
+   Credit Card: XXXX-XXXX-XXXX
+   SSN: ***
+   ```
+
+---
+
+### **Como Funciona**
+- O `IIncrementalGenerator` processa apenas nós de sintaxe que atendem aos critérios especificados, tornando o processo mais eficiente.
+- O código gerado (`User_CreditCardNumber_Masked.g.cs`) é adicionado ao projeto automaticamente em tempo de compilação.
+
+### **Vantagens**
+- Nenhum custo em tempo de execução.
+- Código gerado é seguro, estático e fácil de depurar.
+- Escalável para projetos grandes com pipelines incrementais.
+
+Se precisar de ajustes ou mais detalhes, posso ajudar!

@@ -1,0 +1,155 @@
+Para usar o mesmo nome da propriedade (por exemplo, `CreditCardNumber`) e alterar o comportamento sem criar uma nova propriedade, você pode implementar o mascaramento gerado diretamente na propriedade original usando **Source Generators**. Aqui está o passo a passo:
+
+---
+
+### **Passo 1: Modificar o Gerador**
+
+No gerador, altere o comportamento para substituir a propriedade original com um campo de backing (`field`) e reimplementar a propriedade como `get/set` com a lógica de mascaramento.
+
+#### Arquivo `MaskingGenerator.cs`:
+```csharp
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Text;
+using System.Linq;
+using System.Text;
+
+[Generator]
+public class MaskingGenerator : IIncrementalGenerator
+{
+    public void Initialize(IncrementalGeneratorInitializationContext context)
+    {
+        var propertiesWithMaskAttributes = context.SyntaxProvider
+            .CreateSyntaxProvider(
+                predicate: static (node, _) => node is PropertyDeclarationSyntax prop && prop.AttributeLists.Count > 0,
+                transform: static (context, _) =>
+                {
+                    var property = (PropertyDeclarationSyntax)context.Node;
+                    var classDeclaration = property.Parent as ClassDeclarationSyntax;
+
+                    return (ClassDeclarationSyntax: classDeclaration, Property: property);
+                })
+            .Where(static x => x.ClassDeclarationSyntax is not null);
+
+        context.RegisterSourceOutput(propertiesWithMaskAttributes, GenerateMaskedProperties);
+    }
+
+    private void GenerateMaskedProperties(SourceProductionContext context, (ClassDeclarationSyntax ClassDeclarationSyntax, PropertyDeclarationSyntax Property) input)
+    {
+        var classDeclaration = input.ClassDeclarationSyntax;
+        var property = input.Property;
+
+        var className = classDeclaration.Identifier.Text;
+        var namespaceName = classDeclaration.Parent is NamespaceDeclarationSyntax namespaceDecl
+            ? namespaceDecl.Name.ToString()
+            : "GlobalNamespace";
+
+        var maskAttribute = property.AttributeLists
+            .SelectMany(a => a.Attributes)
+            .FirstOrDefault(attr => attr.Name.ToString() == "Mask");
+
+        if (maskAttribute == null)
+            return;
+
+        var maskValue = maskAttribute.ArgumentList?.Arguments.FirstOrDefault()?.ToString()?.Trim('"') ?? "***";
+        var propertyName = property.Identifier.Text;
+        var propertyType = property.Type.ToString();
+
+        var fieldName = $"_{char.ToLowerInvariant(propertyName[0])}{propertyName.Substring(1)}";
+
+        var source = $@"
+namespace {namespaceName}
+{{
+    public partial class {className}
+    {{
+        private {propertyType} {fieldName};
+
+        public {propertyType} {propertyName}
+        {{
+            get => {fieldName} != null ? ""{maskValue}"" : null;
+            set => {fieldName} = value;
+        }}
+    }}
+}}
+";
+
+        context.AddSource($"{className}_{propertyName}_Masked.g.cs", SourceText.From(source, Encoding.UTF8));
+    }
+}
+```
+
+---
+
+### **Passo 2: Usar a Propriedade Modificada**
+
+1. No projeto de consumo, defina a classe com a propriedade anotada com `[Mask]`:
+
+#### Arquivo `User.cs`:
+```csharp
+public partial class User
+{
+    public string Name { get; set; }
+
+    [Mask("XXXX-XXXX-XXXX")]
+    public string CreditCardNumber { get; set; }
+
+    [Mask]
+    public string SSN { get; set; }
+}
+```
+
+2. Após compilar, o gerador criará a lógica para sobrescrever as propriedades diretamente.
+
+---
+
+### **Passo 3: Testar o Código**
+
+Crie o arquivo `Program.cs` no projeto de consumo:
+
+```csharp
+using System;
+
+var user = new User
+{
+    Name = "John Doe",
+    CreditCardNumber = "1234-5678-9101-1121",
+    SSN = "987-65-4321"
+};
+
+Console.WriteLine($"Name: {user.Name}");
+Console.WriteLine($"Credit Card: {user.CreditCardNumber}"); // Exibe a máscara
+Console.WriteLine($"SSN: {user.SSN}"); // Exibe a máscara
+
+user.CreditCardNumber = "1111-2222-3333-4444";
+Console.WriteLine($"Updated Credit Card: {user.CreditCardNumber}"); // Exibe a nova máscara
+```
+
+#### Saída Esperada:
+```
+Name: John Doe
+Credit Card: XXXX-XXXX-XXXX
+SSN: ***
+Updated Credit Card: XXXX-XXXX-XXXX
+```
+
+---
+
+### **Como Funciona**
+1. O gerador:
+   - Substitui as propriedades anotadas com `[Mask]` por uma implementação com `get/set`.
+   - Cria um campo de backing privado para armazenar o valor real.
+   - Aplica a máscara durante a leitura (`get`).
+
+2. O campo de backing (`field`) mantém o valor real, enquanto a propriedade pública retorna o valor mascarado.
+
+---
+
+### **Vantagens**
+- A interface do consumidor permanece simples, sem necessidade de novas propriedades como `Masked`.
+- Não há custo em tempo de execução, já que o código gerado é estático.
+- A lógica de mascaramento é isolada e configurável via o atributo.
+
+### **Desvantagens**
+- Modificar diretamente o comportamento da propriedade pode ser confuso em algumas situações (e.g., depuração).
+
+Se precisar de ajustes ou melhorias, posso ajudar!
