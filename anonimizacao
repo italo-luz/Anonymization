@@ -1,0 +1,207 @@
+Sim, é possível criar algo semelhante ao que o **Refit** faz, gerando código em tempo de execução ou utilizando um mecanismo de proxy para reduzir o uso direto de **Reflection** em tempo de execução. Isso pode ser alcançado com bibliotecas como **Castle DynamicProxy**, **Source Generators** do .NET, ou mesmo com **IL.Emit**, dependendo do nível de complexidade e desempenho necessário.
+
+Aqui estão algumas abordagens:
+
+---
+
+### **1. Usando Castle DynamicProxy**
+Com **Castle DynamicProxy**, você pode criar um proxy dinâmico para interceptar o acesso aos dados sensíveis.
+
+#### Instalação
+Adicione o pacote `Castle.Core`:
+```bash
+dotnet add package Castle.Core
+```
+
+#### Implementação
+1. Crie um interceptor que aplica o mascaramento.
+
+```csharp
+using Castle.DynamicProxy;
+using System;
+using System.Reflection;
+
+public class MaskingInterceptor : IInterceptor
+{
+    public void Intercept(IInvocation invocation)
+    {
+        // Verifique se é um getter de propriedade
+        if (invocation.Method.IsSpecialName && invocation.Method.Name.StartsWith("get_"))
+        {
+            var propertyName = invocation.Method.Name.Substring(4);
+            var property = invocation.TargetType.GetProperty(propertyName);
+
+            // Verifique se a propriedade tem o atributo MaskAttribute
+            var maskAttribute = property?.GetCustomAttribute<MaskAttribute>();
+            if (maskAttribute != null)
+            {
+                var originalValue = invocation.Method.Invoke(invocation.Proxy, invocation.Arguments) as string;
+                if (!string.IsNullOrEmpty(originalValue))
+                {
+                    invocation.ReturnValue = maskAttribute.MaskPattern;
+                    return;
+                }
+            }
+        }
+
+        // Caso contrário, continue a chamada normalmente
+        invocation.Proceed();
+    }
+}
+```
+
+2. Configure o proxy para a classe.
+
+```csharp
+public static class ProxyGeneratorService
+{
+    private static readonly ProxyGenerator Generator = new ProxyGenerator();
+
+    public static T CreateMaskedProxy<T>() where T : class, new()
+    {
+        var target = new T();
+        var interceptor = new MaskingInterceptor();
+        return Generator.CreateClassProxyWithTarget(target, interceptor);
+    }
+}
+```
+
+3. Utilize o proxy:
+
+```csharp
+public class User
+{
+    public string Name { get; set; }
+
+    [Mask("XXXX-XXXX-XXXX")]
+    public string CreditCardNumber { get; set; }
+
+    [Mask]
+    public string SSN { get; set; }
+}
+
+var user = ProxyGeneratorService.CreateMaskedProxy<User>();
+user.Name = "John Doe";
+user.CreditCardNumber = "1234-5678-9101-1121";
+user.SSN = "987-65-4321";
+
+Console.WriteLine($"Name: {user.Name}"); // Saída: John Doe
+Console.WriteLine($"CreditCardNumber: {user.CreditCardNumber}"); // Saída: XXXX-XXXX-XXXX
+Console.WriteLine($"SSN: {user.SSN}"); // Saída: ****
+```
+
+---
+
+### **2. Usando Source Generators**
+Source Generators geram código em tempo de compilação, eliminando a necessidade de reflexão em tempo de execução.
+
+#### Benefícios
+- Código estático gerado em tempo de compilação.
+- Sem impacto de performance em tempo de execução.
+
+#### Implementação
+1. Crie um projeto **Source Generator**:
+   ```bash
+   dotnet new console -n MaskingGenerator
+   ```
+
+2. Implemente o Source Generator para gerar classes com lógica de mascaramento.
+
+#### Exemplo de Source Generator
+Você pode inspecionar atributos com **Roslyn** e gerar código apropriado.
+
+---
+
+### **3. Usando Expression Trees**
+Crie lambdas para mascarar dados, armazenando esses lambdas em um cache para evitar o uso constante de Reflection.
+
+#### Implementação
+1. Inspecione atributos na primeira execução.
+2. Armazene em um dicionário o delegate para mascaramento.
+
+```csharp
+using System;
+using System.Collections.Concurrent;
+using System.Linq.Expressions;
+using System.Reflection;
+
+public static class MaskingExpressionService
+{
+    private static readonly ConcurrentDictionary<Type, Action<object>> MaskingActions = new();
+
+    public static T MaskSensitiveData<T>(T obj)
+    {
+        if (obj == null) return default;
+
+        var type = typeof(T);
+
+        if (!MaskingActions.TryGetValue(type, out var action))
+        {
+            action = CreateMaskingAction(type);
+            MaskingActions[type] = action;
+        }
+
+        action(obj);
+        return obj;
+    }
+
+    private static Action<object> CreateMaskingAction(Type type)
+    {
+        var parameter = Expression.Parameter(typeof(object), "obj");
+        var castedParameter = Expression.Convert(parameter, type);
+
+        var blockExpressions = new List<Expression>();
+
+        foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            var maskAttribute = property.GetCustomAttribute<MaskAttribute>();
+            if (maskAttribute != null && property.PropertyType == typeof(string) && property.CanWrite)
+            {
+                var propertyAccess = Expression.Property(castedParameter, property);
+                var maskValue = Expression.Constant(maskAttribute.MaskPattern);
+                var assign = Expression.Assign(propertyAccess, maskValue);
+
+                blockExpressions.Add(assign);
+            }
+        }
+
+        var body = Expression.Block(blockExpressions);
+        return Expression.Lambda<Action<object>>(body, parameter).Compile();
+    }
+}
+```
+
+3. Utilize o serviço:
+
+```csharp
+public class User
+{
+    public string Name { get; set; }
+
+    [Mask("XXXX-XXXX-XXXX")]
+    public string CreditCardNumber { get; set; }
+
+    [Mask]
+    public string SSN { get; set; }
+}
+
+var user = new User
+{
+    Name = "John Doe",
+    CreditCardNumber = "1234-5678-9101-1121",
+    SSN = "987-65-4321"
+};
+
+var maskedUser = MaskingExpressionService.MaskSensitiveData(user);
+Console.WriteLine($"Name: {maskedUser.Name}");
+Console.WriteLine($"CreditCardNumber: {maskedUser.CreditCardNumber}");
+Console.WriteLine($"SSN: {maskedUser.SSN}");
+```
+
+---
+
+### Qual Abordagem Escolher?
+
+1. **Castle DynamicProxy**: Se você precisa de flexibilidade e quer evitar código gerado.
+2. **Source Generators**: Ideal para alta performance e cenários onde o código gerado é aceitável.
+3. **Expression Trees**: Excelente para cenários com reuso frequente e cache eficiente.
