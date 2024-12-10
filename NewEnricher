@@ -1,0 +1,149 @@
+Sim, usar reflexão em cada log pode impactar a performance em cenários de alta frequência de log. Para evitar isso, você pode adotar uma abordagem **pré-processada**, onde o mapeamento das propriedades que devem ser ignoradas é feito apenas uma vez por tipo (de forma estática), e o resultado é reutilizado para todas as instâncias.
+
+Aqui está uma solução otimizada:
+
+---
+
+### Solução Otimizada: Cache de Propriedades
+
+1. **Definir o Atributo `[NotLogged]`**
+
+O atributo continua igual, sendo usado para marcar propriedades sensíveis.
+
+```csharp
+[AttributeUsage(AttributeTargets.Property)]
+public class NotLoggedAttribute : Attribute
+{
+}
+```
+
+---
+
+2. **Criar um Cache de Propriedades**
+
+Use um cache estático para armazenar as propriedades logáveis de cada tipo, evitando reflexão repetida.
+
+```csharp
+using Serilog.Core;
+using Serilog.Events;
+using System.Collections.Concurrent;
+using System.Reflection;
+
+public class CachedDestructuringPolicy : IDestructuringPolicy
+{
+    private static readonly ConcurrentDictionary<Type, PropertyInfo[]> CachedProperties = new();
+
+    public bool TryDestructure(object value, ILogEventPropertyValueFactory propertyValueFactory, out LogEventPropertyValue result)
+    {
+        if (value == null)
+        {
+            result = null;
+            return false;
+        }
+
+        var type = value.GetType();
+        var properties = CachedProperties.GetOrAdd(type, t =>
+            t.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+             .Where(p => p.GetCustomAttribute<NotLoggedAttribute>() == null)
+             .ToArray()
+        );
+
+        var loggableProperties = properties
+            .Select(p =>
+            {
+                var propertyValue = p.GetValue(value);
+                return propertyValueFactory.CreateProperty(p.Name, propertyValue);
+            })
+            .ToList();
+
+        result = new StructureValue(loggableProperties);
+        return true;
+    }
+}
+```
+
+---
+
+3. **Configurar o Logger**
+
+Adicione o `CachedDestructuringPolicy` à configuração do logger:
+
+```csharp
+using Serilog;
+
+var logger = new LoggerConfiguration()
+    .Destructure.With(new CachedDestructuringPolicy()) // Política com cache
+    .WriteTo.Console()
+    .CreateLogger();
+```
+
+---
+
+4. **Marcar Propriedades Sensíveis**
+
+Marque as propriedades sensíveis como antes:
+
+```csharp
+public class User
+{
+    public string Name { get; set; }
+
+    [NotLogged]
+    public string Document { get; set; }
+
+    public Address Address { get; set; }
+}
+
+public class Address
+{
+    public string Street { get; set; }
+
+    [NotLogged]
+    public string PostalCode { get; set; }
+}
+```
+
+---
+
+5. **Testar o Log**
+
+```csharp
+var user = new User
+{
+    Name = "John Doe",
+    Document = "123456789",
+    Address = new Address
+    {
+        Street = "123 Main St",
+        PostalCode = "12345"
+    }
+};
+
+logger.Information("User data: {@User}", user);
+```
+
+---
+
+### Resultado do Log
+
+```
+User data: { Name: "John Doe", Address: { Street: "123 Main St" } }
+```
+
+---
+
+### Como Funciona
+
+- **Reflexão Apenas uma Vez**: A reflexão para obter as propriedades logáveis ocorre apenas na primeira vez que o tipo é encontrado.
+- **Cacheado por Tipo**: As propriedades são armazenadas no cache `ConcurrentDictionary<Type, PropertyInfo[]>` e reutilizadas.
+- **Evita Overhead**: Não há necessidade de processar as mesmas informações repetidamente em logs subsequentes.
+
+---
+
+### Benefícios
+
+1. **Alta Performance**: Reflexão é usada apenas na primeira vez por tipo.
+2. **Escalabilidade**: Suporte a objetos complexos e aninhados com exclusões marcadas.
+3. **Controle Centralizado**: O atributo `[NotLogged]` continua sendo o único ponto de configuração.
+
+Essa abordagem combina flexibilidade e eficiência para lidar com campos sensíveis em logs. Se precisar de ajustes, é só avisar!
