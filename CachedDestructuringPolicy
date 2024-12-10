@@ -1,0 +1,40 @@
+using Serilog.Core;
+using Serilog.Events;
+using System.Collections.Concurrent;
+using System.Linq;
+using System.Reflection;
+
+public class CachedDestructuringPolicy : IDestructuringPolicy
+{
+    private static readonly ConcurrentDictionary<Type, PropertyInfo[]> CachedProperties = new();
+
+    public bool TryDestructure(object value, ILogEventPropertyValueFactory propertyValueFactory, out LogEventPropertyValue result)
+    {
+        if (value == null)
+        {
+            result = null;
+            return false;
+        }
+
+        var type = value.GetType();
+
+        // Recupera as propriedades do cache ou as resolve na primeira vez
+        var properties = CachedProperties.GetOrAdd(type, t =>
+            t.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+             .Where(p => p.GetCustomAttribute<NotLoggedAttribute>() == null)
+             .ToArray()
+        );
+
+        // Converte as propriedades logáveis em LogEventPropertyValue
+        var loggableProperties = properties
+            .Select(p =>
+            {
+                var propertyValue = p.GetValue(value);
+                return new LogEventProperty(p.Name, propertyValueFactory.CreatePropertyValue(propertyValue, destructureObjects: true));
+            })
+            .ToList();
+
+        result = new StructureValue(loggableProperties);
+        return true;
+    }
+}
