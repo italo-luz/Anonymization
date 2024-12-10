@@ -1,0 +1,50 @@
+using Serilog.Core;
+using Serilog.Events;
+
+public class ForceToStringEnricher : ILogEventEnricher
+{
+    public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
+    {
+        foreach (var property in logEvent.Properties)
+        {
+            if (property.Value is StructureValue structureValue)
+            {
+                // Substitui o StructureValue pelo valor serializado com ToString()
+                var serializedValue = new ScalarValue(structureValue.ToString());
+                logEvent.AddOrUpdateProperty(new LogEventProperty(property.Key, serializedValue));
+            }
+        }
+    }
+}
+
+----
+
+using Serilog;
+
+var logger = new LoggerConfiguration()
+    .Enrich.With(new ForceToStringEnricher()) // Adiciona o enricher
+    .WriteTo.Console()
+    .CreateLogger();
+
+-----
+
+public class User
+{
+    public string Name { get; set; }
+    public string Document { get; set; }
+
+    public override string ToString()
+    {
+        return $"User(Name: {Name})";
+    }
+}
+
+// Exemplo de log
+var user = new User
+{
+    Name = "John Doe",
+    Document = "123456789"
+};
+
+// Log usando a sintaxe estruturada
+logger.Information("User: {@User}", user);
